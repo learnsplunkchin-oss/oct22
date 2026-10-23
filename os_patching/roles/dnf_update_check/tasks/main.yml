@@ -1,0 +1,387 @@
+---
+# ============================================================
+# DNF Update Check Role - Evidence Collection with Enhanced Parser
+# ============================================================
+
+- name: Validate required DNF check variables
+  ansible.builtin.assert:
+    that:
+      - dnf_check_phase in ['pre', 'post']
+      - target_host is defined
+      - target_host | length > 0
+      - dnf_collector_host is defined
+      - dnf_collector_host | length > 0
+    fail_msg: "DNF check phase, target_host or collector is missing."
+
+- name: Set evidence destination directory
+  ansible.builtin.set_fact:
+    dnf_evidence_destination_dir: >-
+      {{
+        dnf_upgrade_pre_dir
+        if dnf_check_phase == 'pre'
+        else dnf_upgrade_post_dir
+      }}
+
+- name: Ensure evidence directory exists on collector
+  ansible.builtin.file:
+    path: "{{ dnf_evidence_destination_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ dnf_evidence_directory_mode }}"
+  delegate_to: "{{ dnf_collector_host }}"
+  become: true
+  when: inventory_hostname == target_host
+
+- name: Initialize connection and execution state
+  ansible.builtin.set_fact:
+    dnf_connection_failed: false
+    dnf_execution_lost: false
+    dnf_evidence_document: {}
+  when: inventory_hostname == target_host
+
+# ============================================================
+# 1. Connection and authentication check
+# ============================================================
+
+- name: Check SSH connectivity and authentication
+  ansible.builtin.wait_for_connection:
+    timeout: "{{ dnf_connection_timeout | default(15) }}"
+    connect_timeout: "{{ dnf_connect_timeout | default(5) }}"
+    sleep: 2
+  register: dnf_connection_test
+  ignore_unreachable: true
+  ignore_errors: true
+  when: inventory_hostname == target_host
+
+- name: Determine connection failure
+  ansible.builtin.set_fact:
+    dnf_connection_failed: >-
+      {{
+        (dnf_connection_test.unreachable | default(false) | bool)
+        or
+        (dnf_connection_test.failed | default(false) | bool)
+      }}
+    dnf_connection_error_message: >-
+      {{
+        dnf_connection_test.msg
+        | default('SSH connection or authentication failed')
+      }}
+  when: inventory_hostname == target_host
+
+- name: Classify connection failure
+  ansible.builtin.set_fact:
+    dnf_connection_error_type: >-
+      {{
+        'AUTHENTICATION_FAILED'
+        if (
+          'permission denied' in
+          (dnf_connection_error_message | lower)
+          or
+          'authentication failed' in
+          (dnf_connection_error_message | lower)
+          or
+          'no supported authentication methods' in
+          (dnf_connection_error_message | lower)
+        )
+        else 'CONNECTION_ERROR'
+      }}
+  when:
+    - inventory_hostname == target_host
+    - dnf_connection_failed | bool
+
+# ============================================================
+# 2. Build failure evidence when SSH cannot connect
+# ============================================================
+
+- name: Build evidence for connection or authentication failure
+  ansible.builtin.set_fact:
+    dnf_evidence_document:
+      phase: "{{ dnf_check_phase }}"
+      host: "{{ inventory_hostname }}"
+      captured_at: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+      dnf_command: "{{ dnf_check_command | default('dnf -q check-update') }}"
+      dnf_rc: null
+      status: "CONNECTION_FAILED"
+      connection_status: "FAILED"
+      error_type: "{{ dnf_connection_error_type }}"
+      error_message: "{{ dnf_connection_error_message }}"
+      packages: []
+      parsed_count: 0
+      parser_warnings: []
+      parser_info_messages: []
+      reboot_likely_required: false
+      running_kernel_not_latest: false
+      raw_stdout: ""
+      raw_stderr: ""
+      os_distribution: "unknown"
+      os_version: "unknown"
+      kernel: "unknown"
+  when:
+    - inventory_hostname == target_host
+    - dnf_connection_failed | bool
+
+# ============================================================
+# 3. Execute DNF only after a successful connection
+# ============================================================
+
+- name: Execute DNF check-update
+  ansible.builtin.command:
+    argv:
+      - dnf
+      - -q
+      - check-update
+  register: dnf_check_result
+  changed_when: false
+  failed_when: false
+  become: true
+  ignore_unreachable: true
+  when:
+    - inventory_hostname == target_host
+    - not (dnf_connection_failed | bool)
+
+- name: Determine whether connection was lost during DNF check
+  ansible.builtin.set_fact:
+    dnf_execution_lost: >-
+      {{
+        dnf_check_result.unreachable | default(false) | bool
+      }}
+  when:
+    - inventory_hostname == target_host
+    - not (dnf_connection_failed | bool)
+    - dnf_check_result is defined
+
+- name: Build evidence when connection is lost during DNF check
+  ansible.builtin.set_fact:
+    dnf_evidence_document:
+      phase: "{{ dnf_check_phase }}"
+      host: "{{ inventory_hostname }}"
+      captured_at: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+      dnf_command: "{{ dnf_check_command | default('dnf -q check-update') }}"
+      dnf_rc: null
+      status: "CONNECTION_LOST"
+      connection_status: "LOST"
+      error_type: "CONNECTION_LOST"
+      error_message: >-
+        {{
+          dnf_check_result.msg
+          | default('SSH connection was lost during DNF check')
+        }}
+      packages: []
+      parsed_count: 0
+      parser_warnings: []
+      parser_info_messages: []
+      reboot_likely_required: false
+      running_kernel_not_latest: false
+      raw_stdout: ""
+      raw_stderr: ""
+      os_distribution: "unknown"
+      os_version: "unknown"
+      kernel: "unknown"
+  when:
+    - inventory_hostname == target_host
+    - dnf_execution_lost | bool
+
+# ============================================================
+# 4. Install and execute the enhanced DNF output parser
+# ============================================================
+
+- name: Install DNF output parser
+  ansible.builtin.copy:
+    src: parse_dnf_check_update.py
+    dest: /tmp/parse_dnf_check_update.py
+    owner: root
+    group: root
+    mode: "0750"
+  become: true
+  when:
+    - inventory_hostname == target_host
+    - not (dnf_connection_failed | bool)
+    - not (dnf_execution_lost | bool)
+
+- name: Save DNF output for parsing
+  ansible.builtin.copy:
+    content: "{{ dnf_check_result.stdout | default('') }}"
+    dest: "/tmp/dnf-check-{{ dnf_check_phase }}-output.txt"
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  when:
+    - inventory_hostname == target_host
+    - not (dnf_connection_failed | bool)
+    - not (dnf_execution_lost | bool)
+
+- name: Parse DNF output
+  ansible.builtin.command:
+    argv:
+      - python3
+      - /tmp/parse_dnf_check_update.py
+      - --rc
+      - "{{ dnf_check_result.rc | default(999) | string }}"
+      - --input-file
+      - "/tmp/dnf-check-{{ dnf_check_phase }}-output.txt"
+  register: dnf_parser_result
+  changed_when: false
+  failed_when: false
+  become: true
+  when:
+    - inventory_hostname == target_host
+    - not (dnf_connection_failed | bool)
+    - not (dnf_execution_lost | bool)
+
+- name: Build parser failure result
+  ansible.builtin.set_fact:
+    dnf_parsed_result:
+      dnf_rc: "{{ dnf_check_result.rc | default(999) }}"
+      packages: []
+      warnings:
+        - >-
+          DNF output parser failed or returned empty output:
+          {{
+            dnf_parser_result.stderr
+            | default(dnf_parser_result.msg | default('No parser output'))
+          }}
+      info_messages: []
+      parsed_count: 0
+      reboot_likely_required: false
+      running_kernel_not_latest: false
+  when:
+    - inventory_hostname == target_host
+    - not (dnf_connection_failed | bool)
+    - not (dnf_execution_lost | bool)
+    - (dnf_parser_result.rc | default(1) | int != 0) or (dnf_parser_result.stdout | default('') | trim | length == 0)
+
+- name: Load parser JSON result
+  ansible.builtin.set_fact:
+    dnf_parsed_result: "{{ dnf_parser_result.stdout | from_json }}"
+  when:
+    - inventory_hostname == target_host
+    - not (dnf_connection_failed | bool)
+    - not (dnf_execution_lost | bool)
+    - dnf_parser_result.rc | default(1) | int == 0
+    - dnf_parser_result.stdout | default('') | trim | length > 0
+
+# ============================================================
+# 5. Collect OS facts and build successful-connection evidence
+# ============================================================
+
+- name: Gather minimal operating system facts
+  ansible.builtin.setup:
+    gather_subset:
+      - min
+  when:
+    - inventory_hostname == target_host
+    - not (dnf_connection_failed | bool)
+    - not (dnf_execution_lost | bool)
+
+- name: Determine DNF evidence status
+  ansible.builtin.set_fact:
+    dnf_evidence_status: >-
+      {{
+        'OK'
+        if (
+          (dnf_check_result.rc | default(999) | int in [0, 100])
+          and
+          (dnf_parsed_result.warnings | default([]) | length == 0)
+        )
+        else 'ERROR'
+      }}
+  when:
+    - inventory_hostname == target_host
+    - not (dnf_connection_failed | bool)
+    - not (dnf_execution_lost | bool)
+
+- name: Build DNF evidence document
+  ansible.builtin.set_fact:
+    dnf_evidence_document:
+      phase: "{{ dnf_check_phase }}"
+      host: "{{ inventory_hostname }}"
+      captured_at: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+      dnf_command: "{{ dnf_check_command | default('dnf -q check-update') }}"
+      dnf_rc: "{{ dnf_check_result.rc | default(999) | int }}"
+      status: "{{ dnf_evidence_status }}"
+      connection_status: "CONNECTED"
+      error_type: >-
+        {{
+          ''
+          if dnf_evidence_status == 'OK'
+          else 'DNF_OR_PARSER_ERROR'
+        }}
+      error_message: >-
+        {{
+          ''
+          if dnf_evidence_status == 'OK'
+          else (
+            dnf_check_result.stderr
+            | default('')
+            ~ ' '
+            ~ (dnf_parsed_result.warnings | default([]) | join('; '))
+          ) | trim
+        }}
+      packages: "{{ dnf_parsed_result.packages | default([]) }}"
+      parsed_count: "{{ dnf_parsed_result.parsed_count | default(0) | int }}"
+      parser_warnings: "{{ dnf_parsed_result.warnings | default([]) }}"
+      parser_info_messages: "{{ dnf_parsed_result.info_messages | default([]) }}"
+      reboot_likely_required: "{{ dnf_parsed_result.reboot_likely_required | default(false) | bool }}"
+      running_kernel_not_latest: "{{ dnf_parsed_result.running_kernel_not_latest | default(false) | bool }}"
+      raw_stdout: "{{ dnf_check_result.stdout | default('') }}"
+      raw_stderr: "{{ dnf_check_result.stderr | default('') }}"
+      os_distribution: "{{ ansible_facts.distribution | default('unknown') }}"
+      os_version: "{{ ansible_facts.distribution_version | default('unknown') }}"
+      kernel: "{{ ansible_facts.kernel | default('unknown') }}"
+  when:
+    - inventory_hostname == target_host
+    - not (dnf_connection_failed | bool)
+    - not (dnf_execution_lost | bool)
+
+# ============================================================
+# 6. Write evidence on the collector for every outcome
+# ============================================================
+
+- name: Write evidence JSON to collector
+  ansible.builtin.copy:
+    content: "{{ dnf_evidence_document | to_nice_json }}
+"
+    dest: "{{ dnf_evidence_destination_dir }}/{{ inventory_hostname }}.json"
+    owner: root
+    group: root
+    mode: "{{ dnf_evidence_file_mode }}"
+  delegate_to: "{{ dnf_collector_host }}"
+  become: true
+  when:
+    - inventory_hostname == target_host
+    - dnf_evidence_document | length > 0
+
+# ============================================================
+# 7. Remove temporary parser files only when target is reachable
+# ============================================================
+
+- name: Remove temporary parser files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/parse_dnf_check_update.py
+    - "/tmp/dnf-check-{{ dnf_check_phase }}-output.txt"
+  become: true
+  when:
+    - inventory_hostname == target_host
+    - not (dnf_connection_failed | bool)
+    - not (dnf_execution_lost | bool)
+
+# ============================================================
+# 8. Fail the job after writing evidence
+# ============================================================
+
+- name: Fail the host job when DNF check failed
+  ansible.builtin.fail:
+    msg: >-
+      DNF {{ dnf_check_phase }} check failed on {{ inventory_hostname }}.
+      Status={{ dnf_evidence_document.status | default('UNKNOWN') }}.
+      Error type={{ dnf_evidence_document.error_type | default('UNKNOWN') }}.
+      Error={{ dnf_evidence_document.error_message | default('') }}.
+      Evidence={{ dnf_evidence_destination_dir }}/{{ inventory_hostname }}.json
+  when:
+    - inventory_hostname == target_host
+    - dnf_evidence_document.status | default('UNKNOWN') != 'OK'

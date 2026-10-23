@@ -1,0 +1,798 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ dnf_dashboard_title | default('RHEL OS Patching Assessment') | e }}</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f6fa;
+  --panel: #ffffff;
+  --text: #182230;
+  --muted: #667085;
+  --border: #dfe4ec;
+  --accent: #3157a4;
+  --green: #16803c;
+  --amber: #a15c00;
+  --red: #b42318;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Arial, Helvetica, sans-serif;
+  line-height: 1.45;
+}
+header {
+  background: #172b4d;
+  color: white;
+  padding: 26px clamp(16px, 4vw, 44px);
+}
+header h1 { margin: 0 0 8px; font-size: clamp(24px, 3vw, 34px); }
+header p { margin: 4px 0; color: #e0e8f5; }
+main {
+  max-width: 1600px;
+  margin: auto;
+  padding: 24px clamp(12px, 3vw, 32px) 40px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.panel, .metric {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  box-shadow: 0 2px 7px rgba(20, 35, 60, .04);
+  min-width: 0;
+}
+.metric .label { color: var(--muted); font-size: 13px; }
+.metric .value { font-size: 30px; font-weight: 700; margin-top: 5px; }
+.metric .hint { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.section-title {
+  margin: 0 0 14px;
+  font-size: 19px;
+}
+.charts {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: 18px;
+  margin-bottom: 18px;
+}
+.chart-wrap { position: relative; height: 360px; }
+.chart-wrap.small { height: 300px; }
+.host-chart-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(240px, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.chart-caption { margin: 0 0 8px; font-size: 13px; }
+.view-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 18px;
+  padding: 14px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.view-button {
+  border: 1px solid #b8c5d8;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #243b63;
+  padding: 9px 12px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.view-button:hover { background: #eaf0f8; }
+.view-button:focus-visible { outline: 3px solid #8bb5ff; outline-offset: 2px; }
+.host-detail-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.host-detail-heading h3 { margin: 0; }
+[hidden] { display: none !important; }
+
+.table-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+input, select {
+  font: inherit;
+  padding: 10px 12px;
+  border: 1px solid #c9d2df;
+  border-radius: 8px;
+  background: white;
+}
+input { flex: 1; min-width: 220px; }
+.table-scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td {
+  text-align: left;
+  padding: 11px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+th { background: #f8fafc; white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.host-link {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  background: #eef2f6;
+  color: #344054;
+  white-space: nowrap;
+}
+.badge.pass { background: #dcfae6; color: #166534; }
+.badge.remain, .badge.review { background: #fff0c2; color: #854d0e; }
+.badge.failed, .badge.incomplete { background: #fee4e2; color: #912018; }
+.host-detail {
+  margin-top: 18px;
+  scroll-margin-top: 12px;
+}
+.host-detail h3 { margin: 0 0 6px; font-size: 21px; }
+.host-detail h4 { margin: 18px 0 8px; font-size: 15px; }
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.meta-item {
+  padding: 9px 10px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow-wrap: anywhere;
+}
+.meta-item .k { display: block; color: var(--muted); font-size: 12px; }
+.meta-item .v { display: block; font-size: 13px; font-weight: 600; }
+.package-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.package-list {
+  padding-left: 20px;
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.package-list li { margin: 5px 0; }
+.muted { color: var(--muted); }
+.notice {
+  padding: 12px 14px;
+  border: 1px solid #f1d49a;
+  background: #fff8e6;
+  border-radius: 8px;
+  margin: 14px 0;
+}
+footer { color: var(--muted); font-size: 12px; margin-top: 24px; }
+@media (max-width: 900px) {
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .charts { grid-template-columns: 1fr; }
+  .package-columns { grid-template-columns: 1fr; }
+  .host-chart-grid { grid-template-columns: 1fr; }
+  .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 520px) {
+  .grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .metric { padding: 12px; }
+  .metric .value { font-size: 24px; }
+  .meta-grid { grid-template-columns: 1fr; }
+  .chart-wrap { height: 300px; }
+}
+@media print {
+  body { background: white; }
+  header { background: white; color: black; padding: 10px 0; }
+  header p { color: #333; }
+  main { max-width: none; padding: 10px 0; }
+  .panel, .metric { box-shadow: none; break-inside: avoid; }
+  .table-tools { display: none; }
+  .host-detail { break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>{{ dnf_dashboard_title | default('RHEL OS Patching Assessment') | e }}</h1>
+  <p>Evidence-based DNF update assessment for the expected RHEL fleet</p>
+  <p>
+    Generated:
+    {{ assessment.generated_at | default('Unknown') | e }}
+    &nbsp;|&nbsp;
+    Collector:
+    {{ assessment.collector_host | default('Unknown') | e }}
+  </p>
+</header>
+
+<main>
+  <nav class="view-controls" aria-label="Dashboard display controls">
+    <button class="view-button" type="button" onclick="setAllHostDetails(true)">Show all host details</button>
+    <button class="view-button" type="button" onclick="setAllHostDetails(false)">Hide all host details</button>
+  </nav>
+
+  <section id="fleetOverview" aria-label="All-host fleet overview">
+  <section class="grid" aria-label="Assessment summary">
+    <div class="metric">
+      <div class="label">Hosts assessed</div>
+      <div class="value">{{ assessment.summary.hosts | default(0) }}</div>
+      <div class="hint">Expected fleet</div>
+    </div>
+    <div class="metric">
+      <div class="label">Pass</div>
+      <div class="value">{{ assessment.summary.pass | default(0) }}</div>
+      <div class="hint">No post-check candidates reported</div>
+    </div>
+    <div class="metric">
+      <div class="label">Updates remain</div>
+      <div class="value">{{ assessment.summary.updates_remain | default(0) }}</div>
+      <div class="hint">Post-check candidates remain</div>
+    </div>
+    <div class="metric">
+      <div class="label">Attention required</div>
+      <div class="value">{{ assessment.summary.attention_required | default(0) }}</div>
+      <div class="hint">Remaining, failed, incomplete, or review</div>
+    </div>
+  </section>
+
+  <section class="grid" aria-label="Candidate package totals">
+    <div class="metric">
+      <div class="label">Pre-check candidates</div>
+      <div class="value">{{ assessment.summary.precheck_candidates | default(0) }}</div>
+      <div class="hint">
+        Kernel {{ assessment.summary.precheck_kernel | default(0) }}
+        · Regular {{ assessment.summary.precheck_regular | default(0) }}
+      </div>
+    </div>
+    <div class="metric">
+      <div class="label">Post-check candidates</div>
+      <div class="value">{{ assessment.summary.postcheck_candidates | default(0) }}</div>
+      <div class="hint">
+        Kernel {{ assessment.summary.postcheck_kernel | default(0) }}
+        · Regular {{ assessment.summary.postcheck_regular | default(0) }}
+      </div>
+    </div>
+    <div class="metric">
+      <div class="label">Resolved candidates</div>
+      <div class="value">{{ assessment.summary.resolved_candidates | default(0) }}</div>
+      <div class="hint">Present before, absent after</div>
+    </div>
+    <div class="metric">
+      <div class="label">Remaining / new</div>
+      <div class="value">
+        {{ assessment.summary.remaining_candidates | default(0) }}
+        /
+        {{ assessment.summary.new_candidates | default(0) }}
+      </div>
+      <div class="hint">Remaining candidates / newly observed candidates</div>
+    </div>
+  </section>
+
+  <section class="charts">
+    <div class="panel">
+      <h2 class="section-title">Kernel vs Regular Patches by Server</h2>
+      <p class="muted">
+        Each server has separate stacked bars for pre-check and post-check.
+        Counts represent update candidates, not confirmed installed updates.
+      </p>
+      <div class="chart-wrap">
+        <canvas id="patchTypeStackedChart" aria-label="Stacked patch candidate counts by server"></canvas>
+      </div>
+    </div>
+    <div class="panel">
+      <h2 class="section-title">Host Assessment Status</h2>
+      <div class="chart-wrap small">
+        <canvas id="statusChart" aria-label="Host assessment status distribution"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2 class="section-title">Host Summary</h2>
+    <div class="table-tools">
+      <input id="hostSearch" type="search" placeholder="Search host name or status..." aria-label="Search hosts">
+      <select id="statusFilter" aria-label="Filter by status">
+        <option value="">All statuses</option>
+        <option value="PASS">PASS</option>
+        <option value="UPDATES REMAIN">UPDATES REMAIN</option>
+        <option value="PATCH FAILED">PATCH FAILED</option>
+        <option value="INCOMPLETE">INCOMPLETE</option>
+        <option value="REVIEW">REVIEW</option>
+      </select>
+    </div>
+    <div class="table-scroll">
+      <table id="hostTable">
+        <thead>
+          <tr>
+            <th>Host</th>
+            <th>Status</th>
+            <th>Pre kernel</th>
+            <th>Pre regular</th>
+            <th>Post kernel</th>
+            <th>Post regular</th>
+            <th>Resolved</th>
+            <th>Remaining</th>
+            <th>New</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for host in assessment.hosts %}
+          <tr data-host="{{ host.host | lower | e }}" data-status="{{ host.status | e }}">
+            <td>
+              <button class="host-link" type="button"
+                onclick="showHostDetail('{{ host.host | e }}')">
+                {{ host.host | e }}
+              </button>
+            </td>
+            <td><span class="badge status-badge">{{ host.status | e }}</span></td>
+            <td>{{ host.patch_counts.precheck.kernel | default(0) }}</td>
+            <td>{{ host.patch_counts.precheck.regular | default(0) }}</td>
+            <td>{{ host.patch_counts.postcheck.kernel | default(0) }}</td>
+            <td>{{ host.patch_counts.postcheck.regular | default(0) }}</td>
+            <td>{{ host.comparison.resolved_count | default(0) }}</td>
+            <td>{{ host.comparison.remaining_count | default(0) }}</td>
+            <td>{{ host.comparison.new_count | default(0) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  </section><!-- /fleetOverview -->
+
+  <div class="notice">
+    <strong>Interpretation:</strong>
+    Kernel and regular classifications are based on RPM package names.
+    A package disappearing from the post-check candidate list is counted as
+    resolved; this is not independent proof of installation success or reboot.
+    A missing evidence file is marked INCOMPLETE. An explicit FAILED,
+    FAILURE, or ERROR status in either phase is marked PATCH FAILED.
+  </div>
+
+  <section id="hostDetails">
+  {% for host in assessment.hosts %}
+    <article class="panel host-detail" id="detail-{{ host.host | e }}">
+      <div class="host-detail-heading">
+        <h3>{{ host.host | e }}</h3>
+        <button class="view-button host-toggle" type="button"
+          aria-expanded="false" aria-controls="host-content-{{ loop.index0 }}"
+          onclick="toggleHostDetail({{ loop.index0 }}, this)">Show details</button>
+      </div>
+      <p>
+        <span class="badge status-badge">{{ host.status | e }}</span>
+        &nbsp; {{ host.reason | default('') | e }}
+      </p>
+
+      <div class="host-detail-content" id="host-content-{{ loop.index0 }}" hidden>
+      <div class="meta-grid">
+        <div class="meta-item">
+          <span class="k">Operating system</span>
+          <span class="v">
+            {{ host.postcheck.metadata.os_distribution
+               | default(host.precheck.metadata.os_distribution)
+               | default('Unknown') | e }}
+            {{ host.postcheck.metadata.os_version
+               | default(host.precheck.metadata.os_version)
+               | default('') | e }}
+          </span>
+        </div>
+        <div class="meta-item">
+          <span class="k">Pre-check status</span>
+          <span class="v">{{ host.precheck.metadata.status | default('UNKNOWN') | e }}</span>
+        </div>
+        <div class="meta-item">
+          <span class="k">Post-check status</span>
+          <span class="v">{{ host.postcheck.metadata.status | default('UNKNOWN') | e }}</span>
+        </div>
+        <div class="meta-item">
+          <span class="k">Pre-check captured</span>
+          <span class="v">{{ host.precheck.metadata.captured_at | default('Unknown') | e }}</span>
+        </div>
+        <div class="meta-item">
+          <span class="k">Post-check captured</span>
+          <span class="v">{{ host.postcheck.metadata.captured_at | default('Unknown') | e }}</span>
+        </div>
+        <div class="meta-item">
+          <span class="k">Kernel reported</span>
+          <span class="v">{{ host.postcheck.metadata.kernel
+             | default(host.precheck.metadata.kernel)
+             | default('Unknown') | e }}</span>
+        </div>
+        <div class="meta-item">
+          <span class="k">Pre-check DNF return code</span>
+          <span class="v">{{ host.precheck.metadata.dnf_rc | default('Unknown') | e }}</span>
+        </div>
+        <div class="meta-item">
+          <span class="k">Post-check DNF return code</span>
+          <span class="v">{{ host.postcheck.metadata.dnf_rc | default('Unknown') | e }}</span>
+        </div>
+        <div class="meta-item">
+          <span class="k">Pre-check candidate count</span>
+          <span class="v">{{ host.precheck.metadata.package_count | default(0) }}</span>
+        </div>
+        <div class="meta-item">
+          <span class="k">Post-check candidate count</span>
+          <span class="v">{{ host.postcheck.metadata.package_count | default(0) }}</span>
+        </div>
+      </div>
+
+      {% if host.precheck.metadata.stderr or host.postcheck.metadata.stderr %}
+      <h4>Evidence messages</h4>
+      {% if host.precheck.metadata.stderr %}
+        <p><strong>Pre-check:</strong> {{ host.precheck.metadata.stderr | e }}</p>
+      {% endif %}
+      {% if host.postcheck.metadata.stderr %}
+        <p><strong>Post-check:</strong> {{ host.postcheck.metadata.stderr | e }}</p>
+      {% endif %}
+      {% endif %}
+
+      <h4>Patch candidate comparison</h4>
+      <div class="host-chart-grid">
+        <div>
+          <p class="muted chart-caption">Pre-check vs post-check, split by kernel and regular candidates</p>
+          <div class="chart-wrap small">
+            <canvas id="hostChart-{{ loop.index0 }}" aria-label="Horizontal stacked comparison of pre-check and post-check candidates for {{ host.host | e }}"></canvas>
+          </div>
+        </div>
+        <div>
+          <p class="muted chart-caption">Candidate outcome comparison</p>
+          <div class="chart-wrap small">
+            <canvas id="hostOutcomeChart-{{ loop.index0 }}" aria-label="Resolved, remaining, and new candidates for {{ host.host | e }}"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="package-columns">
+        <div>
+          <h4>Resolved candidates ({{ host.comparison.resolved_count }})</h4>
+          <ul class="package-list">
+          {% for package in host.comparison.resolved %}
+            <li>{{ package.label | default(package.name) | e }}
+              <span class="muted">[{{ package.patch_type | default('regular') | e }}]</span>
+            </li>
+          {% else %}
+            <li class="muted">None recorded</li>
+          {% endfor %}
+          </ul>
+        </div>
+        <div>
+          <h4>Remaining candidates ({{ host.comparison.remaining_count }})</h4>
+          <ul class="package-list">
+          {% for package in host.comparison.remaining %}
+            <li>{{ package.label | default(package.name) | e }}
+              <span class="muted">[{{ package.patch_type | default('regular') | e }}]</span>
+            </li>
+          {% else %}
+            <li class="muted">None recorded</li>
+          {% endfor %}
+          </ul>
+        </div>
+        <div>
+          <h4>New candidates ({{ host.comparison.new_count }})</h4>
+          <ul class="package-list">
+          {% for package in host.comparison.new %}
+            <li>{{ package.label | default(package.name) | e }}
+              <span class="muted">[{{ package.patch_type | default('regular') | e }}]</span>
+            </li>
+          {% else %}
+            <li class="muted">None recorded</li>
+          {% endfor %}
+          </ul>
+        </div>
+      </div>
+
+      <h4>Pre-check package candidates ({{ host.precheck.packages | length }})</h4>
+      <ul class="package-list">
+      {% for package in host.precheck.packages %}
+        <li>{{ package.label | default(package.name) | default(package.key) | e }}
+          <span class="muted">[{{ package.patch_type | default('regular') | e }}]</span>
+        </li>
+      {% else %}
+        <li class="muted">No parsed package details</li>
+      {% endfor %}
+      </ul>
+
+      <h4>Post-check package candidates ({{ host.postcheck.packages | length }})</h4>
+      <ul class="package-list">
+      {% for package in host.postcheck.packages %}
+        <li>{{ package.label | default(package.name) | default(package.key) | e }}
+          <span class="muted">[{{ package.patch_type | default('regular') | e }}]</span>
+        </li>
+      {% else %}
+        <li class="muted">No parsed package details</li>
+      {% endfor %}
+      </ul>
+      </div><!-- /host-detail-content -->
+    </article>
+  {% endfor %}
+  </section>
+
+  <footer>
+    Generated from pre-check and post-check JSON evidence.
+    Package candidate counts may differ from installed-package transaction counts.
+    This report does not assign security severity.
+  </footer>
+</main>
+
+<script>
+{{ chartjs_source }}
+
+const assessment = {{ assessment | tojson }};
+const hosts = assessment.hosts || [];
+
+function statusClass(status) {
+  if (status === "PASS") return "pass";
+  if (status === "UPDATES REMAIN") return "remain";
+  if (status === "PATCH FAILED") return "failed";
+  if (status === "INCOMPLETE") return "incomplete";
+  return "review";
+}
+
+document.querySelectorAll(".status-badge").forEach((badge) => {
+  badge.classList.add(statusClass(badge.textContent.trim()));
+});
+
+const labels = hosts.map(host => host.host);
+
+new Chart(document.getElementById("patchTypeStackedChart"), {
+  type: "bar",
+  data: {
+    labels,
+    datasets: [
+      {
+        label: "Pre-check — Kernel",
+        data: hosts.map(h => h.patch_counts?.precheck?.kernel || 0),
+        stack: "precheck"
+      },
+      {
+        label: "Pre-check — Regular",
+        data: hosts.map(h => h.patch_counts?.precheck?.regular || 0),
+        stack: "precheck"
+      },
+      {
+        label: "Post-check — Kernel",
+        data: hosts.map(h => h.patch_counts?.postcheck?.kernel || 0),
+        stack: "postcheck"
+      },
+      {
+        label: "Post-check — Regular",
+        data: hosts.map(h => h.patch_counts?.postcheck?.regular || 0),
+        stack: "postcheck"
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: "index", intersect: false },
+    plugins: {
+      legend: { position: "bottom" },
+      tooltip: { mode: "index", intersect: false }
+    },
+    scales: {
+      x: { stacked: true },
+      y: {
+        stacked: true,
+        beginAtZero: true,
+        ticks: { precision: 0 },
+        title: { display: true, text: "Update candidate count" }
+      }
+    }
+  }
+});
+
+const statusOrder = [
+  "PASS",
+  "UPDATES REMAIN",
+  "PATCH FAILED",
+  "INCOMPLETE",
+  "REVIEW"
+];
+const statusCounts = statusOrder.map(status =>
+  hosts.filter(host => host.status === status).length
+);
+
+new Chart(document.getElementById("statusChart"), {
+  type: "doughnut",
+  data: {
+    labels: statusOrder,
+    datasets: [{ label: "Hosts", data: statusCounts }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { position: "bottom" } }
+  }
+});
+
+hosts.forEach((host, index) => {
+  const canvas = document.getElementById(`hostChart-${index}`);
+  if (canvas) {
+    new Chart(canvas, {
+      type: "bar",
+      data: {
+        labels: ["Pre-check", "Post-check"],
+        datasets: [
+          {
+            label: "Kernel",
+            data: [
+              host.patch_counts?.precheck?.kernel || 0,
+              host.patch_counts?.postcheck?.kernel || 0
+            ],
+            stack: "packages"
+          },
+          {
+            label: "Regular",
+            data: [
+              host.patch_counts?.precheck?.regular || 0,
+              host.patch_counts?.postcheck?.regular || 0
+            ],
+            stack: "packages"
+          }
+        ]
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { position: "bottom" },
+          tooltip: { mode: "index", intersect: false }
+        },
+        scales: {
+          x: {
+            stacked: true,
+            beginAtZero: true,
+            ticks: { precision: 0 },
+            title: { display: true, text: "Update candidates" }
+          },
+          y: { stacked: true }
+        }
+      }
+    });
+  }
+
+  const outcomeCanvas = document.getElementById(`hostOutcomeChart-${index}`);
+  if (outcomeCanvas) {
+    const resolved = host.comparison?.resolved_count || 0;
+    const remaining = host.comparison?.remaining_count || 0;
+    const newlyObserved = host.comparison?.new_count || 0;
+    new Chart(outcomeCanvas, {
+      type: "doughnut",
+      data: {
+        labels: ["Resolved", "Remaining", "New"],
+        datasets: [{
+          label: "Candidates",
+          data: [resolved, remaining, newlyObserved]
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: "bottom" },
+          tooltip: {
+            callbacks: {
+              label: (context) => `${context.label}: ${context.raw}`
+            }
+          }
+        }
+      }
+    });
+  }
+});
+
+function resizeChartsIn(container) {
+  if (!container) return;
+  requestAnimationFrame(() => {
+    container.querySelectorAll("canvas").forEach((canvas) => {
+      const chart = Chart.getChart(canvas);
+      if (chart) chart.resize();
+    });
+  });
+}
+
+function setAllHostDetails(visible) {
+  const section = document.getElementById("hostDetails");
+  if (!section) return;
+
+  // Keep every host card visible. Only expand or collapse its detail content.
+  section.hidden = false;
+  section.querySelectorAll(".host-detail-content").forEach((content) => {
+    content.hidden = !visible;
+  });
+  section.querySelectorAll(".host-toggle").forEach((button) => {
+    button.textContent = visible ? "Hide details" : "Show details";
+    button.setAttribute("aria-expanded", String(visible));
+  });
+  if (visible) resizeChartsIn(section);
+}
+
+// Enforce the intended initial state even if the template is reused or edited:
+// fleet overview remains visible, host cards remain visible, and details start collapsed.
+document.addEventListener("DOMContentLoaded", () => {
+  const section = document.getElementById("hostDetails");
+  if (!section) return;
+  section.hidden = false;
+  section.querySelectorAll(".host-detail-content").forEach((content) => {
+    content.hidden = true;
+  });
+  section.querySelectorAll(".host-toggle").forEach((button) => {
+    button.textContent = "Show details";
+    button.setAttribute("aria-expanded", "false");
+  });
+});
+
+function toggleHostDetail(index, button) {
+  const content = document.getElementById("host-content-" + index);
+  if (!content) return;
+  const visible = content.hidden;
+  content.hidden = !visible;
+  button.textContent = visible ? "Hide details" : "Show details";
+  button.setAttribute("aria-expanded", String(visible));
+  if (visible) resizeChartsIn(content);
+}
+
+function showHostDetail(hostName) {
+  const detail = document.getElementById("detail-" + hostName);
+  const section = document.getElementById("hostDetails");
+  if (!detail || !section) return;
+  section.hidden = false;
+  const content = detail.querySelector(".host-detail-content");
+  const button = detail.querySelector(".host-toggle");
+  if (content) content.hidden = false;
+  if (button) {
+    button.textContent = "Hide details";
+    button.setAttribute("aria-expanded", "true");
+  }
+  resizeChartsIn(detail);
+  detail.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function filterHosts() {
+  const search = document.getElementById("hostSearch").value.toLowerCase().trim();
+  const status = document.getElementById("statusFilter").value;
+
+  document.querySelectorAll("#hostTable tbody tr").forEach(row => {
+    const host = row.dataset.host || "";
+    const rowStatus = row.dataset.status || "";
+    const matchesSearch =
+      host.includes(search) || rowStatus.toLowerCase().includes(search);
+    const matchesStatus = !status || rowStatus === status;
+    row.hidden = !(matchesSearch && matchesStatus);
+  });
+}
+
+document.getElementById("hostSearch").addEventListener("input", filterHosts);
+document.getElementById("statusFilter").addEventListener("change", filterHosts);
+</script>
+</body>
+</html>

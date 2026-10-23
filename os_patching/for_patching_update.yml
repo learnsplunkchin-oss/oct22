@@ -1,0 +1,106 @@
+---
+- name: Apply approved RHEL updates and record central patch status
+  hosts: "{{ target_host }}"
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Validate required patching configuration
+      ansible.builtin.assert:
+        that:
+          - target_host is defined
+          - target_host | length > 0
+          - dnf_collector_host is defined
+          - dnf_upgrade_status_dir is defined
+        fail_msg: "target_host, dnf_collector_host and dnf_upgrade_status_dir must be configured."
+
+    - name: Create central patch-status directory
+      ansible.builtin.file:
+        path: "{{ dnf_upgrade_status_dir }}"
+        state: directory
+        owner: "{{ dnf_report_owner | default('root') }}"
+        group: "{{ dnf_report_group | default('root') }}"
+        mode: "{{ dnf_report_directory_mode | default('0750') }}"
+      delegate_to: "{{ dnf_collector_host }}"
+
+    - name: Seed central status as UNKNOWN before patch execution
+      ansible.builtin.copy:
+        dest: "{{ dnf_upgrade_status_dir }}/{{ inventory_hostname }}.json"
+        owner: "{{ dnf_report_owner | default('root') }}"
+        group: "{{ dnf_report_group | default('root') }}"
+        mode: "{{ dnf_report_file_mode | default('0640') }}"
+        content: |
+          {
+            "host": {{ inventory_hostname | to_json }},
+            "patch_job_status": "UNKNOWN",
+            "patch_return_code": -1,
+            "message": "Patch execution has not produced a final result.",
+            "recorded": true
+          }
+      delegate_to: "{{ dnf_collector_host }}"
+
+    - name: Apply updates and record patch result
+      block:
+        - name: Run DNF update
+          ansible.builtin.command:
+            cmd: dnf update -y
+          register: dnf_update_result
+          changed_when: dnf_update_result.rc == 0
+          failed_when: dnf_update_result.rc != 0
+
+      rescue:
+        - name: Record patch failure details
+          ansible.builtin.set_fact:
+            patch_job_status: "FAILED"
+            patch_job_message: >-
+              DNF update failed.
+              {{
+                dnf_update_result.msg
+                | default(dnf_update_result.stderr | default('No error details returned'))
+              }}
+
+      always:
+        - name: Determine final patch execution status
+          ansible.builtin.set_fact:
+            patch_job_status: >-
+              {{
+                'OK'
+                if (
+                  dnf_update_result is defined
+                  and dnf_update_result.rc is defined
+                  and (dnf_update_result.rc | int) == 0
+                )
+                else 'FAILED'
+              }}
+            patch_job_message: >-
+              {{
+                'DNF update command completed successfully.'
+                if (
+                  dnf_update_result is defined
+                  and dnf_update_result.rc is defined
+                  and (dnf_update_result.rc | int) == 0
+                )
+                else (
+                  'DNF update failed: '
+                  ~ (
+                    dnf_update_result.msg
+                    | default(dnf_update_result.stderr | default('Non-zero return code'))
+                  )
+                )
+              }}
+
+        - name: Write final patch status JSON to vm1
+          ansible.builtin.copy:
+            dest: "{{ dnf_upgrade_status_dir }}/{{ inventory_hostname }}.json"
+            owner: "{{ dnf_report_owner | default('root') }}"
+            group: "{{ dnf_report_group | default('root') }}"
+            mode: "{{ dnf_report_file_mode | default('0640') }}"
+            content: |
+              {
+                "host": {{ inventory_hostname | to_json }},
+                "patch_job_status": {{ patch_job_status | to_json }},
+                "patch_return_code": {{ dnf_update_result.rc | default(-1) | int }},
+                "message": {{ patch_job_message | default('No final patch result was established.') | to_json }},
+                "recorded": true
+              }
+          delegate_to: "{{ dnf_collector_host }}"

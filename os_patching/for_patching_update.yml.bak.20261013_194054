@@ -1,0 +1,94 @@
+---
+- name: Prepare central patch-status evidence directory
+  ansible.builtin.file:
+    path: "{{ dnf_upgrade_status_dir }}"
+    state: directory
+    owner: "{{ dnf_report_owner | default('root') }}"
+    group: "{{ dnf_report_group | default('root') }}"
+    mode: "{{ dnf_report_directory_mode | default('0750') }}"
+  delegate_to: "{{ dnf_collector_host }}"
+  become: true
+
+# Seed an UNKNOWN result before attempting the patch.
+# If the target becomes unreachable, this evidence remains available.
+- name: Initialize patch status as UNKNOWN on the collector
+  ansible.builtin.copy:
+    dest: "{{ dnf_upgrade_status_dir }}/{{ inventory_hostname }}.json"
+    owner: "{{ dnf_report_owner | default('root') }}"
+    group: "{{ dnf_report_group | default('root') }}"
+    mode: "{{ dnf_report_file_mode | default('0640') }}"
+    content: |
+      {
+        "host": {{ inventory_hostname | to_json }},
+        "patch_job_status": "UNKNOWN",
+        "patch_return_code": -1,
+        "message": "No final patch result recorded. The target may be unreachable or patch execution may not have completed.",
+        "recorded": true
+      }
+  delegate_to: "{{ dnf_collector_host }}"
+  become: true
+
+- name: Apply updates and record patch status
+  block:
+    - name: Run DNF update
+      ansible.builtin.command:
+        cmd: dnf update -y
+      register: dnf_update_result
+      become: true
+      changed_when: dnf_update_result.rc == 0
+      failed_when: dnf_update_result.rc != 0
+
+  rescue:
+    - name: Record failed patch result
+      ansible.builtin.set_fact:
+        patch_job_status: "FAILED"
+        patch_job_message: >-
+          DNF update failed.
+          {{ dnf_update_result.msg | default(dnf_update_result.stderr | default('No error details returned')) }}
+
+  always:
+    - name: Determine final patch status
+      ansible.builtin.set_fact:
+        patch_job_status: >-
+          {{
+            'OK'
+            if (
+              dnf_update_result is defined
+              and dnf_update_result.rc is defined
+              and (dnf_update_result.rc | int) == 0
+            )
+            else 'FAILED'
+          }}
+        patch_job_message: >-
+          {{
+            'DNF update completed successfully.'
+            if (
+              dnf_update_result is defined
+              and dnf_update_result.rc is defined
+              and (dnf_update_result.rc | int) == 0
+            )
+            else (
+              'DNF update failed: '
+              ~ (
+                dnf_update_result.msg
+                | default(dnf_update_result.stderr | default('Non-zero return code'))
+              )
+            )
+          }}
+
+    - name: Write final patch status JSON to the central collector
+      ansible.builtin.copy:
+        dest: "{{ dnf_upgrade_status_dir }}/{{ inventory_hostname }}.json"
+        owner: "{{ dnf_report_owner | default('root') }}"
+        group: "{{ dnf_report_group | default('root') }}"
+        mode: "{{ dnf_report_file_mode | default('0640') }}"
+        content: |
+          {
+            "host": {{ inventory_hostname | to_json }},
+            "patch_job_status": {{ patch_job_status | to_json }},
+            "patch_return_code": {{ (dnf_update_result.rc | default(-1) | int) }},
+            "message": {{ patch_job_message | default('Patch execution ended without a confirmed result.') | to_json }},
+            "recorded": true
+          }
+      delegate_to: "{{ dnf_collector_host }}"
+      become: true
