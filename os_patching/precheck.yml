@@ -1,9 +1,0 @@
----
-- name: Capture pre-patching DNF evidence for one target
-  hosts: "{{ target_host }}"
-  gather_facts: false
-  become: true
-  ignore_unreachable: true
-
-  roles:
-    - dnf_precheck

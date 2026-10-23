@@ -1,7 +1,0 @@
----
-- name: Collect DNF precheck evidence
-  ansible.builtin.include_role:
-    name: dnf_update_check
-  vars:
-    dnf_check_phase: pre
-
