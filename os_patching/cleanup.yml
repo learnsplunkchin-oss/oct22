@@ -1,0 +1,8 @@
+---
+- name: Clean DNF patch validation data
+  hosts: "{{ dnf_collector_host | default('vm1') }}"
+  gather_facts: false
+  become: true
+
+  roles:
+    - role: dnf_cleanup

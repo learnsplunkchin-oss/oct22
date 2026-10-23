@@ -1,0 +1,10 @@
+
+---
+- name: Generate and email central RHEL OS patch assessment
+  hosts: vm1
+  gather_facts: false
+  become: true
+
+  roles:
+    - dnf_assess
+    - dnf_email_report

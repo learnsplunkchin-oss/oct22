@@ -1,0 +1,42 @@
+---
+- name: Verify collector host is reachable
+  ansible.builtin.wait_for_connection:
+    timeout: 10
+  delegate_to: "{{ dnf_collector_host }}"
+
+- name: Validate cleanup configuration
+  ansible.builtin.assert:
+    that:
+      - dnf_collector_host is defined
+      - dnf_upgrade_pre_dir is defined
+      - dnf_upgrade_post_dir is defined
+      - dnf_upgrade_report_dir is defined
+      - dnf_host_report_dir is defined
+    fail_msg: "Required variables are missing from group_vars/all.yml."
+
+- name: Remove previous evidence and reports
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ dnf_upgrade_pre_dir }}"
+    - "{{ dnf_upgrade_post_dir }}"
+    - "{{ dnf_upgrade_report_dir }}"
+  delegate_to: "{{ dnf_collector_host }}"
+  become: true
+
+- name: Create clean evidence directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ dnf_evidence_directory_mode }}"
+  loop:
+    - "{{ dnf_upgrade_pre_dir }}"
+    - "{{ dnf_upgrade_post_dir }}"
+    - "{{ dnf_upgrade_report_dir }}"
+    - "{{ dnf_host_report_dir }}"
+  delegate_to: "{{ dnf_collector_host }}"
+  become: true
+

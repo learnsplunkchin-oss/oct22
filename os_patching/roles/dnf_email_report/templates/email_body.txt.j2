@@ -1,0 +1,67 @@
+RHEL OS Patching Assessment Report
+===================================
+
+Generated: {{ assessment.assessment.generated_at }}
+Collector Host: {{ assessment.assessment.collector_host }}
+
+ASSESSMENT SUMMARY
+------------------
+Total Hosts: {{ assessment.assessment.host_count }}
+✓ PASS: {{ assessment.summary.pass }}
+⚠ INCOMPLETE: {{ assessment.summary.incomplete }}
+✗ PATCH FAILED: {{ assessment.summary.patch_failed }}
+⚠ UPDATES REMAIN: {{ assessment.summary.updates_remain }}
+
+ATTACHED FILES ({{ attachment_count }} HTML reports)
+--------------
+This email contains the following HTML report files:
+
+1. os_patching_dashboard.html - Executive dashboard with summary metrics
+{% for host in expected_hosts %}
+{{ loop.index + 1 }}. {{ host }}.html - Detailed assessment for {{ host }}
+{% endfor %}
+
+INSTRUCTIONS TO VIEW REPORTS
+----------------------------
+To view the assessment reports correctly:
+
+1. Download ALL attached HTML files to the SAME folder on your computer
+   Examples:
+   - Windows: C:\Reports\OS_Patching\
+   - macOS/Linux: ~/Downloads/os_patching/
+
+2. Open "os_patching_dashboard.html" in your web browser
+   - This is the main executive dashboard
+   - It contains summary metrics and a searchable host table
+   - Use the search box to filter hosts by name or status
+
+3. Click "View evidence →" links in the dashboard to view individual host details
+   - The dashboard will open the corresponding host HTML files
+   - All files MUST be in the same folder for links to work correctly
+
+IMPORTANT NOTES
+---------------
+• Do NOT rename the HTML files - dashboard links depend on exact filenames
+• Keep all files in the same directory for proper navigation
+• Reports are self-contained and do not require internet access
+• For security, do not forward these reports to unauthorized recipients
+
+ASSESSMENT INTERPRETATION
+-------------------------
+• PASS: Complete evidence, successful patch job, no remaining updates
+• INCOMPLETE: Missing or invalid evidence, or unconfirmed job outcome
+• PATCH FAILED: Recorded patch job failure
+• UPDATES REMAIN: Available update candidates remain after patching
+
+HOST STATUS BREAKDOWN
+---------------------
+{% for report in assessment.reports %}
+{{ report.host }}: {{ report.assessment_status }}{% if not report.evidence_complete %} (Evidence incomplete){% endif %}
+
+{% endfor %}
+
+For questions or issues, please contact the Platform Operations team.
+
+---
+This is an automated report from the RHEL OS Patching Assessment system.
+Evidence directory: {{ base_dir }}
